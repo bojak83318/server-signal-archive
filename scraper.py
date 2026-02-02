@@ -1,5 +1,5 @@
 import os
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 import time
@@ -9,20 +9,15 @@ import re
 # --- CONFIG ---
 OUTPUT_DIR = "offers"
 BASE_URL = "https://lowendtalk.com/categories/offers/p"
-PAGES_TO_SCAN = 3 
+PAGES_TO_SCAN = 1
 
-# Professional Headers
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept-Language': 'en-US,en;q=0.9',
-}
-
-# --- PROXY CONFIGURATION (The "Secret" Tunnel) ---
+# --- PROXY CONFIGURATION ---
 PROXY_URL = os.environ.get("PROXY_URL") 
-PROXIES = { "http": PROXY_URL, "https": PROXY_URL } if PROXY_URL else None
+# curl_cffi expects proxies in a specific format
+PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 
 def clean_filename(title):
-    return re.sub(r'[\\/*?:"<>|]', "", title).replace(" ", "_")[:50]
+    return re.sub(r'[\\/*?:"<>|]', "", title).replace(" ", "_")[:100]
 
 def file_exists(thread_id):
     if not os.path.exists(OUTPUT_DIR): return False
@@ -33,7 +28,6 @@ def file_exists(thread_id):
 
 def save_markdown(data):
     if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
-    
     filename = f"{OUTPUT_DIR}/{data['id']}_{clean_filename(data['title'])}.md"
     content = f"""---
 id: {data['id']}
@@ -42,7 +36,6 @@ date: "{data['date']}"
 author: "{data['author']}"
 link: "{data['url']}"
 ---
-
 # {data['title']}
 **Link:** [Original Thread]({data['url']})
 
@@ -50,46 +43,60 @@ link: "{data['url']}"
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"   [SAVED] {filename}")
+    print(f"   ✅ [SAVED] {filename}")
 
 def run_scraper():
-    print(f"--- Starting Git-Scraper Job ---")
+    print(f"--- Starting Stealth Scraper (curl_cffi) ---")
+    
+    # Init Session with Chrome Fingerprint
+    # This is the magic line that bypasses Cloudflare
+    session = requests.Session(impersonate="chrome120")
     if PROXIES:
-        print(f"🕵️  Using Proxy: ENABLED (Routing via Romania)")
-    else:
-        print(f"⚠️  Using Proxy: DISABLED (Direct Connection)")
+        session.proxies = PROXIES
+        print(f"🕵️  Proxy Enabled")
 
     for page in range(1, PAGES_TO_SCAN + 1):
-        print(f"Scanning Page {page}...")
+        print(f"\n📄 Scanning Page {page}...")
         try:
-            r = requests.get(f"{BASE_URL}{page}", headers=HEADERS, proxies=PROXIES, timeout=15)
-            if r.status_code != 200:
-                print(f"!! Blocked/Error on Page {page}: {r.status_code}")
-                break
-                
+            # Fetch Listing
+            r = session.get(f"{BASE_URL}{page}", timeout=30)
             soup = BeautifulSoup(r.content, 'html.parser')
+            
             threads = soup.find_all('li', class_='ItemDiscussion')
+            print(f"   Found {len(threads)} raw items.")
 
             for thread in threads:
                 try:
-                    title_tag = thread.find('a', class_='Title')
+                    title_tag = thread.select_one('.Title a')
+                    if not title_tag: continue
+
                     link = title_tag['href']
                     title = title_tag.text.strip()
-                    thread_id = thread['id'].replace("Discussion_", "")
+                    thread_id = thread.get('id', '').replace("Discussion_", "")
                     
                     if file_exists(thread_id):
-                        print(f"   [SKIP] {thread_id} exists.")
+                        print(f"   ⏭️ [SKIP] {thread_id} exists.")
                         continue
 
-                    print(f"-> New Offer: {title[:30]}...")
-                    # Respectful delay before fetching detail
-                    time.sleep(random.uniform(1.5, 3.0))
+                    print(f"   🔎 Processing: {title[:40]}...")
                     
-                    thread_resp = requests.get(link, headers=HEADERS, proxies=PROXIES, timeout=15)
+                    # Polite Delay
+                    time.sleep(random.uniform(2.0, 5.0))
+                    
+                    # Fetch Thread Detail
+                    thread_resp = session.get(link, timeout=30)
+                    
+                    # Cloudflare Check
+                    if "Just a moment" in thread_resp.text:
+                        print("   ❌ STILL BLOCKED. (Consider increasing sleep time)")
+                        continue
+
                     thread_soup = BeautifulSoup(thread_resp.content, 'html.parser')
-                    
                     main_post = thread_soup.find('div', class_='Message')
-                    author = thread.find('span', class_='Author').text.strip()
+                    
+                    # Metadata
+                    author_tag = thread.find('span', class_='Author')
+                    author = author_tag.text.strip() if author_tag else "Unknown"
                     date_tag = thread.find('time')
                     date = date_tag['datetime'] if date_tag else "Unknown"
 
@@ -104,10 +111,10 @@ def run_scraper():
                         })
 
                 except Exception as e:
-                    print(f"   Error parsing thread: {e}")
+                    print(f"   ❌ Error: {e}")
 
         except Exception as e:
-            print(f"Critical Fail on Page {page}: {e}")
+            print(f"Critical Fail: {e}")
 
 if __name__ == "__main__":
     run_scraper()
