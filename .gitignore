@@ -1,6 +1,13 @@
+# Python
 venv/
 __pycache__/
 *.pyc
+
+# Local Config & Secrets
 .env
-.DS_Store
 local_run.sh
+debug_block.html
+debug_layout.html
+
+# System
+.DS_Store
